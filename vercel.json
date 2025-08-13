@@ -1,14 +1,15 @@
 {
-  "version": 2,
-  "functions": {
-    "main_app.py": {
-      "runtime": "python3.10"
-    }
-  },
-  "routes": [
-    {
-      "src": "/(.*)",
-      "dest": "/main_app.py"
-    }
-  ]
-}
+    "version": 2,
+    "builds": [
+      {
+        "src": "Dockerfile",
+        "use": "@vercel/docker"
+      }
+    ],
+    "routes": [
+      {
+        "src": "/(.*)",
+        "dest": "/"
+      }
+    ]
+  }

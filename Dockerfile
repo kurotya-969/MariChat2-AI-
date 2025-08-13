@@ -50,4 +50,4 @@ gatherUsageStats = false\n\
 EXPOSE 8501
 
 # Streamlitアプリケーションを起動
-CMD ["streamlit", "run", "main_app.py", "--server.port=8501", "--server.address=0.0.0.0", "--server.headless=true", "--server.enableCORS=false", "--server.enableXsrfProtection=false"]
+CMD ["streamlit", "run", "main_app.py","--server.port=$PORT","--server.port=8501", "--server.address=0.0.0.0", "--server.headless=true", "--server.enableCORS=false", "--server.enableXsrfProtection=false"]
