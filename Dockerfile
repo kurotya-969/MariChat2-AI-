@@ -31,6 +31,7 @@ RUN mkdir -p $HOME/.streamlit
 RUN echo '\
 [server]\n\
 headless = true\n\
+port = 8501\n\
 address = "0.0.0.0"\n\
 enableCORS = false\n\
 enableXsrfProtection = false\n\
@@ -45,14 +46,8 @@ textColor = "#FAFAFA"\n\
 gatherUsageStats = false\n\
 ' > $HOME/.streamlit/config.toml
 
-# 動的ポートを公開（Render対応）
-EXPOSE $PORT
-
-# 起動スクリプトを作成
-RUN echo '#!/bin/bash\n\
-PORT=${PORT:-8501}\n\
-streamlit run main_app.py --server.port=$PORT --server.address=0.0.0.0 --server.headless=true --server.enableCORS=false --server.enableXsrfProtection=false\n\
-' > start.sh && chmod +x start.sh
+# デフォルトポートを公開
+EXPOSE 8501
 
 # Streamlitアプリケーションを起動
-CMD ["./start.sh"]
+CMD ["streamlit", "run", "main_app.py", "--server.port=8501", "--server.address=0.0.0.0", "--server.headless=true", "--server.enableCORS=false", "--server.enableXsrfProtection=false"]

@@ -37,8 +37,8 @@ class Config:
     LOG_LEVEL: str = os.getenv("LOG_LEVEL", "INFO")
     LOG_FORMAT: str = "%(asctime)s - %(name)s - %(levelname)s - %(message)s"
     
-    # Streamlit設定（Render対応でPORT環境変数を優先）
-    STREAMLIT_PORT: int = int(os.getenv("PORT", os.getenv("STREAMLIT_PORT", "8501")))
+    # Streamlit設定
+    STREAMLIT_PORT: int = int(os.getenv("STREAMLIT_PORT", "8501"))
     
     # セキュリティ設定
     SESSION_TIMEOUT: int = int(os.getenv("SESSION_TIMEOUT", "3600"))  # 1時間
