@@ -1,5 +1,14 @@
 FROM python:3.10-slim
 
+# システムの依存関係をインストール（最初にrootで実行）
+RUN apt-get update && apt-get install -y \
+    build-essential \
+    curl \
+    software-properties-common \
+    git \
+    && apt-get clean \
+    && rm -rf /var/lib/apt/lists/*
+
 # 非rootユーザーを作成
 RUN useradd -m -u 1000 user
 USER user
@@ -8,18 +17,6 @@ ENV HOME=/home/user \
 
 # 作業ディレクトリを設定
 WORKDIR $HOME/app
-
-# システムの依存関係をインストール（rootで実行）
-USER root
-RUN apt-get update && apt-get install -y \
-    build-essential \
-    curl \
-    software-properties-common \
-    git \
-    && rm -rf /var/lib/apt/lists/*
-
-# userに戻る
-USER user
 
 # Pythonの依存関係をコピーしてインストール
 COPY --chown=user requirements.txt .
