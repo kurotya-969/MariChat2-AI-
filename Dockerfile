@@ -31,7 +31,6 @@ RUN mkdir -p $HOME/.streamlit
 RUN echo '\
 [server]\n\
 headless = true\n\
-port = 7860\n\
 address = "0.0.0.0"\n\
 enableCORS = false\n\
 enableXsrfProtection = false\n\
@@ -46,11 +45,14 @@ textColor = "#FAFAFA"\n\
 gatherUsageStats = false\n\
 ' > $HOME/.streamlit/config.toml
 
-# ポート7860を公開（Hugging Face Spaces標準）
-EXPOSE 7860
+# 動的ポートを公開（Render対応）
+EXPOSE $PORT
 
-# ヘルスチェック
-HEALTHCHECK CMD curl --fail http://localhost:7860/_stcore/health
+# 起動スクリプトを作成
+RUN echo '#!/bin/bash\n\
+PORT=${PORT:-8501}\n\
+streamlit run main_app.py --server.port=$PORT --server.address=0.0.0.0 --server.headless=true --server.enableCORS=false --server.enableXsrfProtection=false\n\
+' > start.sh && chmod +x start.sh
 
 # Streamlitアプリケーションを起動
-CMD ["streamlit", "run", "main_app.py", "--server.port=7860", "--server.address=0.0.0.0", "--server.headless=true", "--server.enableCORS=false", "--server.enableXsrfProtection=false"]
+CMD ["./start.sh"]

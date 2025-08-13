@@ -47,8 +47,8 @@ class Config:
     LOG_FORMAT: str = "%(asctime)s - %(name)s - %(levelname)s - %(message)s"
 
     # --- UI設定 ---
-    # Streamlitアプリケーションが使用するポート番号
-    STREAMLIT_PORT: int = int(os.getenv("STREAMLIT_PORT", "7860"))
+    # Streamlitアプリケーションが使用するポート番号（Render対応でPORT環境変数を優先）
+    STREAMLIT_PORT: int = int(os.getenv("PORT", os.getenv("STREAMLIT_PORT", "7860")))
 
     # --- セキュリティ設定 ---
     # ユーザーセッションのタイムアウト時間（秒単位）
