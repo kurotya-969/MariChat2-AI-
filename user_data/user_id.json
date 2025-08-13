@@ -1,0 +1,34 @@
+{
+  "user_id": "8693c76d-c7f2-4ba1-b22b-38206860b813",
+  "created_at": "2025-08-10T11:06:46.406248",
+  "last_access": "2025-08-10T11:39:43.954320",
+  "version": "1.0",
+  "game_data": {
+    "messages": [
+      {
+        "role": "assistant",
+        "content": "何の用？遊びに来たの？",
+        "is_initial": true
+      },
+      {
+        "role": "user",
+        "content": "カフェ行かない？",
+        "timestamp": "2025-08-10T11:19:25.900960",
+        "message_id": "user_1"
+      },
+      {
+        "role": "assistant",
+        "content": "[HIDDEN:（人混みは苦手だけど…あんたとなら少しはマシかも）] はぁ…なんでまたこんなところに連れて来やがったんだよ。騒がしいし、煙草の匂いまで漂ってきそうだ。 …まあ、コーヒーの香りだけは、ま、悪くないかな。",
+        "timestamp": "2025-08-10T11:19:30.876739",
+        "message_id": "assistant_2"
+      }
+    ],
+    "affection": 30,
+    "scene_params": {
+      "theme": "cafe_afternoon",
+      "last_updated": "\"2025-08-10T11:19:27.738579\""
+    },
+    "ura_mode": false,
+    "saved_at": "2025-08-10T11:19:52.888681"
+  }
+}
