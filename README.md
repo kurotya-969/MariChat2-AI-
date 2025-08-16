@@ -129,26 +129,79 @@ GROQ_API_KEY=your_groq_api_key_here
 3. **環境変数を設定**
    `.env`ファイルを作成：
    ```bash
-   # 必須設定
-   TOGETHER_API_KEY=your_together_api_key_here
-   GROQ_API_KEY=your_groq_api_key_here
-   
-   # オプション設定
-   SYSTEM_PROMPT_MARI=your_custom_prompt_here
-   SYSTEM_PROMPT_URA=your_ura_mode_prompt_here
-   DEBUG_MODE=true
-   
-   # 手紙機能設定
-   MAX_DAILY_REQUESTS=5
-   STORAGE_PATH=/tmp/letters.json
-   BATCH_SCHEDULE_HOURS=2,3,4
-   ASYNC_LETTER_ENABLED=true
-   ```
+# 麻理チャット＆手紙生成アプリケーション
 
-4. **アプリケーションを実行**
-   ```bash
-   streamlit run main_app.py
-   ```
+## 概要
+
+麻理チャットは、捨てられたアンドロイド「麻理」と対話し、関係性や好感度が変化するAIチャット＆手紙生成アプリです。ユーザーごとに会話履歴や好感度が保存され、いつでも続きから遊べます。
+
+## 主な機能
+
+- Streamlitベースの美しいUI
+- 好感度システム：会話内容によって麻理との関係性が変化
+- シーン・背景自動切り替え
+- 手紙生成機能（好感度に応じて解放）
+- ユーザーデータの永続保存（HuggingFaceユーザーIDベース）
+- フルリセット・会話リセット機能
+- メモリマネージャーによる会話圧縮・要約
+
+## HuggingFace Spaces ログイン推奨
+
+**本アプリは HuggingFace Spaces 上でのユーザー認証（ログイン）に対応しています。**
+
+- ログインすることで、あなた専用のユーザーデータ（好感度・会話履歴など）が安全に永続ストレージに保存されます。
+- ログインしていない場合は一時的なID（UUID）で管理され、データの永続性や復元性が制限されます。
+- **推奨：HuggingFaceアカウントでログインしてご利用ください。**
+
+## インストール・起動方法
+
+1. 必要なライブラリをインストール
+
+```bash
+pip install -r requirements.txt
+```
+
+2. HuggingFaceトークンを設定
+
+- `secrets.toml` に `HF_TOKEN="your_token_here"` を記載してください。
+
+3. Streamlitで起動
+
+```bash
+streamlit run main_app.py
+```
+
+## 使い方
+
+- サイドバーで好感度やシーン情報を確認できます。
+- チャット欄で麻理に話しかけてください。
+- 好感度が上がると新しい機能や手紙生成が解放されます。
+- 「データ保存」ボタンで進行状況を保存できます。
+- 「会話リセット」「フルリセット」ボタンで状態を初期化できます。
+
+## 好感度システムについて
+
+- 会話内容によって好感度（affection）が上下します。
+- 好感度に応じて麻理の反応や関係性ステージ（友達、親密、恋人など）が変化します。
+- 好感度が一定値を超えるとマイルストーン通知や特別なイベントが発生します。
+
+## データ保存について
+
+- HuggingFaceログイン時は、ユーザーIDベースで安全にデータが保存・復元されます。
+- ログインしていない場合は一時IDで保存されますが、セッション終了時に消える場合があります。
+
+## 注意事項
+
+- 本アプリは研究・デモ目的です。個人情報の入力はお控えください。
+- バグ報告・要望はGitHubリポジトリまでお願いします。
+
+## ライセンス
+
+MIT License
+
+---
+
+**HuggingFace Spacesでのログインを推奨します。ログインすることで、あなた専用のデータが安全に保存され、より快適に麻理との対話を楽しめます！**
 
 5. **ブラウザでアクセス**
    - 自動的にブラウザが開きます
