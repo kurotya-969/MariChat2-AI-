@@ -4,14 +4,18 @@ HttpOnlyクッキーによるセキュアなセッション管理を提供
 """
 from fastapi import FastAPI, Request, Response, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import RedirectResponse, JSONResponse
+import requests
 import uuid
 import json
 import os
 import time
+import secrets
+import base64
+from huggingface_hub import attach_huggingface_oauth, parse_huggingface_oauth
 from datetime import datetime, timedelta
 from typing import Optional, Dict, Any
 import logging
-
 # ログ設定
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
@@ -32,6 +36,15 @@ app.add_middleware(
     allow_methods=["GET", "POST", "PUT", "DELETE"],
     allow_headers=["*"],
 )
+
+attach_huggingface_oauth(app)
+
+@app.get("/")
+def greet_json(request: Request):
+    oauth_info = parse_huggingface_oauth(request)
+    if oauth_info is None:
+        return {"msg": "Not logged in!"}
+    return {"msg": f"Hello, {oauth_info.user_info.preferred_username}!"}
 
 class SessionManager:
     """セッション管理クラス"""

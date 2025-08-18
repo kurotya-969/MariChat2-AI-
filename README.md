@@ -1,14 +1,22 @@
 ---
----
+
 title: 麻理チャット＆手紙生成 統合アプリ
 emoji: 🐕
 colorFrom: pink
 colorTo: purple
 sdk: streamlit
 sdk_version: 1.27.0
-python_version: 3.9.13
+python_version: 3.10.0
 app_file: main_app.py
 pinned: false
+hf_oauth: true
+hf_oauth_expiration_minutes: 480  # トークンの有効期限（分）
+hf_oauth_scopes:
+  - read-repos
+  - write-repos
+  - manage-repos
+  - inference-api
+
 ---
 
 # 🐕 麻理チャット＆手紙生成 統合アプリ
@@ -45,6 +53,7 @@ pinned: false
 - **レート制限**: API使用量の適切な制御
 - **エラー回復**: 障害時の自動復旧機能
 - **セッション管理**: 強化されたセッション分離とデータ整合性
+- **HFとのOAuth連携**:セッション分離とデータ保持
 
 ## 🚀 セットアップ方法
 
@@ -571,7 +580,10 @@ flake8 .
 
 ## 🔄 更新履歴
 
-### v2.1.0 (最新)
+### v2.2.0
+-**OAuth連携によるセッション分離**:HFへのログイン機能追加
+
+### v2.1.0 
 - 🐕 **ポチ機能**: 画面右下の犬アシスタントによる本音一括表示（吹き出し位置を左寄せに調整）
 - 🔓 **セーフティ統合**: 左サイドバーへの統合と色分け表示（URAプロンプト対応）
 - 🎨 **シーン検出強化**: Groq API優先、フォールバック機能付きの高精度シーン変更

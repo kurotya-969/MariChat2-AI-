@@ -26,8 +26,11 @@ class StorageError(Exception):
 class AsyncStorageManager:
     """非同期ストレージ管理クラス"""
     
-    def __init__(self, file_path: str = "tmp/letters.json"):
-        self.file_path = Path(file_path)
+    def __init__(self, user_id: str,base_path: str = "mnt/data/users"):
+        self.user_id = user_id
+        self.base_path = Path(base_path)
+        self.user_dir = self.base_path / user_id
+        self.file_path = self.user_dir / "letters.json"
         self.backup_dir = self.file_path.parent / "backup"
         self.lock = asyncio.Lock()
         

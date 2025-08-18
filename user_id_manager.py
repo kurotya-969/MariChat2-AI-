@@ -14,13 +14,17 @@ logger = logging.getLogger(__name__)
 class UserIDManager:
     """ユーザーIDの永続化を管理するクラス"""
     
-    def __init__(self, storage_dir: str = "user_data"):
+    def __init__(self, user_id: str, storage_dir: str = "/mnt/data/user_data"):
         """
         Args:
             storage_dir: ユーザーデータを保存するディレクトリ
         """
         self.storage_dir = storage_dir
-        self.user_id_file = os.path.join(storage_dir, "user_id.json")
+
+        self.user_id = user_id
+
+        self.user_id_file = os.path.join(self.storage_dir, f"{self.user_id}.json")
+
         self._ensure_storage_dir()
     
     def _ensure_storage_dir(self):

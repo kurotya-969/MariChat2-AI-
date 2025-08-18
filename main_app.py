@@ -9,14 +9,23 @@ import asyncio
 import sys
 import time
 import streamlit.components.v1 as components
-from huggingface_hub import HfApi, whoami
-from datetime import datetime
+import requests
 from dotenv import load_dotenv
 from contextlib import contextmanager
+from urllib.parse import urlencode
 
 # --- HFユーザーIDによる永続ストレージ管理 ---
 import json
 import uuid
+
+# --- 定数と環境変数の設定 ---
+HF_ENDPOINT = "https://huggingface.co"
+
+# README.mdで hf_oauth: true を設定すると、以下の環境変数が自動的に設定される
+CLIENT_ID = os.environ.get("OAUTH_CLIENT_ID")
+CLIENT_SECRET = os.environ.get("OAUTH_CLIENT_SECRET")
+SPACE_ID = os.environ.get("SPACE_ID")
+SPACE_HOST = os.environ.get("SPACE_HOST")
 
 st.set_page_config(
         page_title="麻理プロジェクト", page_icon="🤖",
@@ -28,33 +37,63 @@ st.set_page_config(
 USER_DATA_DIR = "/mnt/data/mari_users"
 os.makedirs(USER_DATA_DIR, exist_ok=True)
 
-# --- 1. HF トークン取得 ---
-# secrets.toml に HF_TOKEN="your_token_here" として保存しておく
-hf_token = st.secrets.get("HF_TOKEN")
 
-# --- 2. ユーザー ID 判定 ---
-if hf_token:
+# vvv 修正点: この関数を全面的に書き換え
+def get_redirect_uri():
+    """
+    SpaceのURL形式（直接形式 or パス形式）に応じて正しいリダイレクトURIを生成する
+    """
+    # SPACE_HOSTが設定されている場合（直接形式URL）はそれを使うのが最も確実
+    if SPACE_HOST:
+        return f"https://{SPACE_HOST}"
+    # SPACE_HOSTがない場合（古い形式のSpaceなど）はSPACE_IDから組み立てる
+    elif SPACE_ID:
+        return f"https://huggingface.co/spaces/{SPACE_ID}"
+
+def get_hf_token(code: str, redirect_uri: str) -> dict | None:
+    """認可コード(code)をアクセストークンに交換する"""
+    url = f"{HF_ENDPOINT}/oauth/token"
+    payload = {
+        "grant_type": "authorization_code",
+        "code": code,
+        "redirect_uri": redirect_uri,
+        "client_id": CLIENT_ID,
+        "client_secret": CLIENT_SECRET,
+    }
+    st.info("ステップ1.5: トークン交換リクエストを送信します。ペイロード:")
+    st.json(payload) # 送信する内容を画面に表示
+
     try:
-        api = HfApi()
-        user_info = whoami(token=hf_token)
-        user_id = user_info["id"]
-        st.session_state.is_hf_user = True
-    except Exception as e:
-        st.warning(f"HF API エラー: {e}. 一時 UUID を使用します。")
-        if "temp_user_id" not in st.session_state:
-            st.session_state.temp_user_id = str(uuid.uuid4())
-        user_id = st.session_state.temp_user_id
-        st.session_state.is_hf_user = False
-else:
-    # トークンなし → UUID フォールバック
-    if "temp_user_id" not in st.session_state:
-        st.session_state.temp_user_id = str(uuid.uuid4())
-    user_id = st.session_state.temp_user_id
-    st.session_state.is_hf_user = False
-
-user_file = os.path.join(USER_DATA_DIR, f"{user_id}.json")
-st.write(f"ユーザー ID: {user_id} (HF ログイン: {st.session_state.is_hf_user})")
-
+        response = requests.post(url, data=payload)
+        response.raise_for_status()
+        return response.json()
+    except requests.exceptions.RequestException as e:
+        st.error(f"トークンの取得に失敗しました: {e}")
+        # vvv この行が最重要！サーバーからのエラーレスポンスを直接表示 vvv
+        if hasattr(e, 'response') and e.response is not None:
+            st.error("サーバーからの詳細なエラーレスポンス:")
+            st.json(e.response.json())
+        return None
+    
+def get_user_info(access_token: str) -> dict | None:
+    """アクセストークンを使ってユーザー情報を取得する"""
+    url = f"{HF_ENDPOINT}/api/whoami-v2"
+    headers = {"Authorization": f"Bearer {access_token}"}
+    try:
+        response = requests.get(url, headers=headers)
+        response.raise_for_status()
+        return response.json()
+    except requests.exceptions.HTTPError as e:
+        # HTTPエラーの場合、レスポンス内容を詳しく表示
+        st.error(f"ユーザー情報の取得に失敗しました (HTTP Error): {e}")
+        st.error(f"ステータスコード: {e.response.status_code}")
+        st.error(f"レスポンス: {e.response.text}") # これが最も重要な情報
+        return None
+    except requests.exceptions.RequestException as e:
+        # その他のネットワークエラーなど
+        st.error(f"ユーザー情報の取得に失敗しました (Request Exception): {e}")
+        return None
+    
 # --- 基本設定 ---
 # 非同期処理の問題を解決 (Windows向け)
 if sys.platform.startswith('win'):
@@ -87,7 +126,7 @@ def start_session_server():
     セッション管理サーバーを自動起動する
     Hugging Face Spacesでの実行時に必要
     """
-    import subprocess
+
     import threading
     import requests
     import time
@@ -159,13 +198,28 @@ def start_session_server():
 
 # アプリケーション起動時にサーバーを自動起動
 if 'server_started' not in st.session_state:
+    st.session_state["server_started"] = False
     st.session_state.server_started = start_session_server()
     if st.session_state.server_started:
         logger.info("🚀 セッション管理サーバー起動完了")
+        st.session_state["server_started"] = True
     else:
         logger.warning("⚠️ セッション管理サーバー起動失敗 - フォールバックモードで動作")
 
-
+def get_current_user_id():
+    """
+    現在のセッションに対応する一意なIDを取得する。
+    - ログインしている場合は、Hugging FaceのユーザーIDを返す。
+    - ログインしていない場合は、セッション内で維持されるUUIDを返す。
+    """
+    # 1. ログイン済みのユーザーIDを最優先で使う
+    #    キー名を 'user_data' に修正
+    if "user_data" in st.session_state and "id" in st.session_state["user_data"]:
+        return st.session_state["user_data"]["id"], True
+    # 未認証ならuser_idをUUIDで生成
+    if "user_id" not in st.session_state:
+        st.session_state["user_id"] = str(uuid.uuid4())
+    return st.session_state["user_id"], False
 # --- 必要なモジュールのインポート ---
 
 # << 麻理チャット用モジュール >>
@@ -226,8 +280,16 @@ def run_async(coro):
 
 # --- ▼▼▼ 1. 初期化処理の一元管理 ▼▼▼ ---
 
+
+# 毎回ユーザーIDを取得しセッションにセット（セッション分離のため）
+user_id, is_hf_user = get_current_user_id()
+st.session_state.user_id = user_id
+logger.info(f"✅ セッション初期化時にユーザーIDをセット: {user_id} (HF: {is_hf_user})")
+
+
+
 @st.cache_resource
-def initialize_cached_managers():
+def initialize_cached_managers(user_id: str):
     """
     キャッシュ可能な管理クラスのみを初期化する
     Streamlitコンポーネントを使用しないクラスのみ
@@ -238,8 +300,11 @@ def initialize_cached_managers():
     - 旧st.cacheは非推奨
     """
     logger.info("Initializing cached managers...")
+
+
+
     # --- 手紙機能の依存モジュール ---
-    letter_storage = AsyncStorageManager(Config.STORAGE_PATH)
+    letter_storage = AsyncStorageManager(Config.STORAGE_PATH, user_id)
     letter_rate_limiter = AsyncRateLimitManager(letter_storage, max_requests=Config.MAX_DAILY_REQUESTS)
     user_manager = UserManager(letter_storage)
     letter_request_manager = RequestManager(letter_storage, letter_rate_limiter)
@@ -258,7 +323,7 @@ def initialize_cached_managers():
     dog_assistant = DogAssistant()
     tutorial_manager = TutorialManager()
     session_api_client = SessionAPIClient()
-    user_id_manager = UserIDManager()  # ユーザーID永続化管理
+    user_id_manager = UserIDManager(user_id=user_id)# ユーザーID永続化管理
 
     logger.info("Cached managers initialized.")
     return {
@@ -307,21 +372,28 @@ def initialize_session_state(managers, force_reset_override=False):
         force_reset_override: 強制リセットフラグ（フルリセット時に使用）
     """
 
-      # 基本的なセッション状態を最初に初期化（Cookie処理より前）
+    # 基本的なセッション状態を最初に初期化（Cookie処理より前）
     logger.info("🚀 基本セッション状態の早期初期化開始")
     
+    # セッション状態の初期化
+    if 'authenticated' not in st.session_state:
+        st.session_state.authenticated = False
+    if 'user_info' not in st.session_state:
+        st.session_state.user_info = None
+    if 'token' not in st.session_state:
+        st.session_state.token = None
     if 'chat_initialized' not in st.session_state:
         st.session_state.chat_initialized = False
         logger.info("✅ chat_initialized フラグを初期化（Cookie処理前）")
-    
+
     if 'memory_notifications' not in st.session_state:
         st.session_state.memory_notifications = []
         logger.info("✅ memory_notifications を初期化")
-    
+
     if 'affection_notifications' not in st.session_state:
         st.session_state.affection_notifications = []
         logger.info("✅ affection_notifications を初期化")
-    
+
     if 'debug_mode' not in st.session_state:
         st.session_state.debug_mode = os.getenv("DEBUG_MODE", "false").lower() == "true"
         logger.info(f"✅ debug_mode を初期化: {st.session_state.debug_mode}")
@@ -359,55 +431,12 @@ def initialize_session_state(managers, force_reset_override=False):
     # persistent_user_manager 完全廃止
     user_id_manager = managers["user_id_manager"]  # フォールバック用
     session_api_client = managers["session_api_client"]
-    
-    # Cookie認証ベースのユーザーID取得（起動時uuid4()生成を排除）
-    # 重複ID生成防止: 既にuser_idがあり、force_resetでない場合は既存IDを使用
-    if 'user_id' in st.session_state and not force_reset:
-        session_id = st.session_state.user_id
-        logger.debug(f"既存ユーザーID使用（rerun対応）: {session_id[:8]}...")
-    else:
-        # Cookie認証ベースでユーザーIDを取得（新規作成またはリセット時のみ）
-        # persistent_user_manager 完全廃止
-        try:
-            session_id = user_id_manager.get_or_create_user_id()
-            logger.info(f"ユーザーID取得: {session_id[:8]}...")
-        except Exception as e2:
-            logger.error(f"ユーザーID取得失敗: {e2}")
-            session_id = f"temp_{id(st.session_state)}"
-            logger.warning(f"最終フォールバック: セッション固有一時ID: {session_id}")
-    
-    # ユーザーIDとしてセッションIDを使用
-    # 安全にuser_idの存在をチェック
-    current_user_id = getattr(st.session_state, 'user_id', None)
-    session_changed = (current_user_id is None or 
-                      current_user_id != session_id or 
-                      force_reset)
-    
-    if session_changed:
-        st.session_state.user_id = session_id
-        
-        # SessionManagerにユーザーIDを設定
-        session_manager.set_user_id(session_id)
-        
-        # セッション情報をログ出力
-        from datetime import datetime  # ローカルインポートで確実に利用可能にする
-        session_info = {
-            "user_id": session_id[:8] + "...",  # session_idを直接使用（既に設定済み）
-            "session_id": id(st.session_state),
-            "force_reset": force_reset,
-            "session_changed": session_changed,
-            "timestamp": datetime.now().isoformat()
-        }
-        logger.info(f"FastAPIセッション管理でユーザーセッション設定: {session_info}")
-        
-        # セッション固有の識別子を保存
-        st.session_state._session_id = id(st.session_state)
-    else:
-        # 既存セッションの場合もSessionManagerにユーザーIDを設定
-        if session_manager.user_id != session_id:
-            session_manager.set_user_id(session_id)
-        
-        logger.debug(f"既存セッション継続使用: {st.session_state.user_id[:8]}...")
+
+    # SessionManagerにユーザーIDを設定
+   
+    session_manager.set_user_id(st.session_state.user_id)
+    st.session_state._session_id = id(st.session_state)
+    logger.info(f"✅ セッション初期化時にユーザーIDをセット: {st.session_state.user_id} (OAuth/HF: {is_hf_user})")
 
     # chat_initialized フラグは既に初期化済み（Cookie処理前に実行済み）
 
@@ -418,12 +447,11 @@ def initialize_session_state(managers, force_reset_override=False):
         force_reset
     )
 
-    if needs_chat_initialization:
-        # 保存されたゲームデータを読み込み（重複防止・統一化）
+    # 認証直後のuser_id切り替え時に、保存データが存在する場合は必ずゲームデータを再読込・復元
+    has_user_data = user_id_manager.is_user_data_exists()
+
+    if needs_chat_initialization or has_user_data:
         saved_game_data = None
-        
-        # 永続ストレージを優先、失敗時のみフォールバック
-        # persistent_user_manager 完全廃止
         try:
             saved_game_data = user_id_manager.load_game_data(st.session_state.user_id)
             if saved_game_data:
@@ -433,11 +461,9 @@ def initialize_session_state(managers, force_reset_override=False):
         except Exception as e2:
             logger.error(f"ゲームデータ読み込み失敗: {e2}")
             saved_game_data = None
-        
+
         if saved_game_data and not force_reset:
-            # 保存データから復元
             logger.info(f"保存されたゲームデータを復元: {st.session_state.user_id[:8]}...")
-            
             initial_message = "何の用？遊びに来たの？"
             st.session_state.chat = {
                 "messages": saved_game_data.get("messages", [{"role": "assistant", "content": initial_message, "is_initial": True}]),
@@ -1342,244 +1368,305 @@ def render_chat_tab_content(managers):
             current_theme_name = st.session_state.chat['scene_params'].get("theme", "default")
             st.markdown(f"**現在のシーン**: {current_theme_name}")
 
+                # 認証状態の表示
+      
 
-
-        with st.expander("💾 データ保存"):
-            # 保存データの存在確認（永続ストレージ優先）
-            # persistent_user_manager 完全廃止
             user_id_manager = managers["user_id_manager"]  # フォールバック用
-            
+                
             has_saved_data = False
             user_info = None
             
-            try:
-                # 永続ストレージから確認
-                # persistent_user_manager 完全廃止
-                has_saved_data = user_info is not None and "game_data" in user_info
-                if has_saved_data:
-                    logger.debug("永続ストレージに保存データを確認")
-            except Exception as e:
-                logger.warning(f"永続ストレージ確認エラー、フォールバック使用: {e}")
-                # フォールバック: 従来のローカルファイル方式
-                has_saved_data = user_id_manager.is_user_data_exists()
-                if has_saved_data:
-                    user_info = user_id_manager.get_user_info()
-                    logger.debug("フォールバック: ローカルファイルに保存データを確認")
+        if 'token_data' in st.session_state:
+            # --- ログイン済みの画面 ---
+            user_data = st.session_state.get('user_data', {})
             
-            if has_saved_data and user_info and "game_data" in user_info:
-                # 保存データがある場合の情報表示
-                game_data = user_info["game_data"]
-                if game_data:
-                    saved_affection = game_data.get("affection", "不明")
-                    saved_messages = len(game_data.get("messages", []))
-                    saved_at = game_data.get("saved_at", "不明")
-                    if saved_at != "不明":
-                        try:
-                            from datetime import datetime
-                            saved_time = datetime.fromisoformat(saved_at.replace('Z', '+00:00'))
-                            saved_at = saved_time.strftime("%m/%d %H:%M")
-                        except:
-                            pass
-                    
-                    # ストレージタイプを表示
-                    storage_type = "🌐 永続ストレージ" if user_info.get("storage_type") != "local" else "📁 ローカル"
-                    st.info(f"💾 保存データあり ({storage_type})\n好感度: {saved_affection}/100\nメッセージ: {saved_messages}件\n保存日時: {saved_at}")
+            st.success(f"ようこそ、{user_data.get('name', 'ユーザー')} さん！")
+
+            st.write("ログイン済みです。")
             
-            if st.button("💾 ゲームデータを保存", help="現在の進行状況（好感度、チャット履歴など）をファイルに保存します", use_container_width=True):
-                success = save_game_data_to_file(managers)
-                if success:
-                    st.success("✅ ゲームデータを保存しました！")
-                    if 'chat' in st.session_state:
-                        affection = st.session_state.chat.get('affection', 30)
-                        message_count = len(st.session_state.chat.get('messages', []))
-                        st.info(f"📊 保存内容\n好感度: {affection}/100\nメッセージ: {message_count}件")
+            if st.button("ログアウト"):
+                # セッション情報をクリアしてログアウト
+                del st.session_state['token_data']
+                if 'user_data' in st.session_state:
+                    del st.session_state['user_data']
+                # ページを再読み込みしてクリーンな状態にする
+                st.rerun()
+
+        else:
+            # --- 未ログインの画面 ---
+            
+            # 2. Hugging Faceからのリダイレクト直後か確認 (URLに 'code' があるか)
+            query_params = st.experimental_get_query_params()
+            auth_code_list = query_params.get("code",[])
+
+            if auth_code_list:
+                auth_code = auth_code_list[0]
+                redirect_uri = get_redirect_uri()
+
+                # --- ステップB: アクセストークンの取得 ---
+                token_data = get_hf_token(auth_code, redirect_uri)
+
+                if token_data and isinstance(token_data, dict):
+                    st.info("ステップ1: アクセストークンの取得に成功しました。") # デバッグ情報
+                    access_token = token_data.get('access_token')
+                    if access_token:
+                        user_data = get_user_info(access_token)
+                        st.write("ステップ2: get_user_info の結果:")
+                        st.write(user_data)
+
+                        if user_data and isinstance(user_data, dict):
+                            st.session_state['user_data'] = user_data
+                            # 認証直後にuser_idをHF IDで更新し、セッション再初期化
+                            st.session_state['user_id'] = user_data.get('id', str(uuid.uuid4()))
+                            st.info("ログイン成功！")
+                            st.session_state['token_data'] = token_data
+                            st.session_state['user_data'] = user_data
+                            st.session_state['user_id'] = user_data.get("id")
+                            st.experimental_set_query_params()
+                            st.rerun()
+                        else:
+                            st.warning("ステップ3: ユーザー情報の取得に失敗したため、ログインを中断しました。上記のエラーメッセージを確認してください。")
+                    else:
+                        st.error("エラー: `token_data`内に`access_token`が見つかりませんでした。")
+                        st.json(token_data)
+            else:
+                st.warning("現在ログインしていません。")
+                if not CLIENT_ID or not CLIENT_SECRET:
+                    st.error("OAuthクライアントが設定されていません。SpaceのREADME.mdを確認し、再起動してください。")
                 else:
-                    st.error("❌ ゲームデータの保存に失敗しました。")
+                    redirect_uri = get_redirect_uri()
+                    params = { "client_id": CLIENT_ID, "redirect_uri": redirect_uri, "scope": "openid profile", "state": "STATE_STRING", "response_type": "code", }
+                    login_url = f"{HF_ENDPOINT}/oauth/authorize?{urlencode(params)}"
+                    st.markdown(f'<a href="{login_url}" target="_self" style="display: inline-block; padding: 10px 20px; background-color: #FFD21E; color: black; text-align: center; text-decoration: none; border-radius: 5px; font-weight: bold;">🤗 Hugging Faceでログイン</a>', unsafe_allow_html=True)
+            
+        try:
+                    # 永続ストレージから確認
+                    # persistent_user_manager 完全廃止
+                    has_saved_data = user_info is not None and "game_data" in user_info
+                    if has_saved_data:
+                        logger.debug("永続ストレージに保存データを確認")
+        except Exception as e:
+                    logger.warning(f"永続ストレージ確認エラー、フォールバック使用: {e}")
+                    # フォールバック: 従来のローカルファイル方式
+                    has_saved_data = user_id_manager.is_user_data_exists()
+                    if has_saved_data:
+                        user_info = user_id_manager.get_user_info()
+                        logger.debug("フォールバック: ローカルファイルに保存データを確認")
+                
+        if has_saved_data and user_info and "game_data" in user_info:
+                    # 保存データがある場合の情報表示
+                    game_data = user_info["game_data"]
+                    if game_data:
+                        saved_affection = game_data.get("affection", "不明")
+                        saved_messages = len(game_data.get("messages", []))
+                        saved_at = game_data.get("saved_at", "不明")
+                        if saved_at != "不明":
+                            try:
+                                from datetime import datetime
+                                saved_time = datetime.fromisoformat(saved_at.replace('Z', '+00:00'))
+                                saved_at = saved_time.strftime("%m/%d %H:%M")
+                            except:
+                                pass
+                        
+                        # ストレージタイプを表示
+                        storage_type = "🌐 永続ストレージ" if user_info.get("storage_type") != "local" else "📁 ローカル"
+                        st.info(f"💾 保存データあり ({storage_type})\n好感度: {saved_affection}/100\nメッセージ: {saved_messages}件\n保存日時: {saved_at}")
+                
+        if st.button("💾 ゲームデータを保存", help="現在の進行状況（好感度、チャット履歴など）をファイルに保存します", use_container_width=True):
+                    success = save_game_data_to_file(managers)
+                    if success:
+                        st.success("✅ ゲームデータを保存しました！")
+                        if 'chat' in st.session_state:
+                            affection = st.session_state.chat.get('affection', 30)
+                            message_count = len(st.session_state.chat.get('messages', []))
+                            st.info(f"📊 保存内容\n好感度: {affection}/100\nメッセージ: {message_count}件")
+                    else:
+                        st.error("❌ ゲームデータの保存に失敗しました。")
 
         with st.expander("⚙️ 設定"):
-            # 設定ボタン内の表示を大きくするCSS
-            settings_css = """
-            <style>
-            .settings-content {
-                font-size: 18px !important;
-            }
-            .settings-content .stButton > button {
-                font-size: 18px !important;
-                padding: 12px 20px !important;
-                height: auto !important;
-            }
-            .settings-content .stButton > button div {
-                font-size: 18px !important;
-            }
-            </style>
-            """
-            st.markdown(settings_css, unsafe_allow_html=True)
-            
-            # 設定コンテンツをラップ
-            st.markdown('<div class="settings-content">', unsafe_allow_html=True)
-            
-            # ... (エクスポートやリセットボタンのロジックは省略) ...
-            if st.button("🔄 会話をリセット", type="secondary", use_container_width=True, help="あなたの会話履歴のみをリセットします（他のユーザーには影響しません）"):
-                # チャット履歴を完全にリセット
-                st.session_state.chat['messages'] = [{"role": "assistant", "content": "何の用？遊びに来たの？", "is_initial": True}]
-                st.session_state.chat['affection'] = 30
-                st.session_state.chat['scene_params'] = {"theme": "default"}
-                st.session_state.chat['limiter_state'] = managers['rate_limiter'].create_limiter_state()
-                st.session_state.chat['ura_mode'] = False  # 裏モードもリセット
+                # 設定ボタン内の表示を大きくするCSS
+                settings_css = """
+                <style>
+                .settings-content {
+                    font-size: 18px !important;
+                }
+                .settings-content .stButton > button {
+                    font-size: 18px !important;
+                    padding: 12px 20px !important;
+                    height: auto !important;
+                }
+                .settings-content .stButton > button div {
+                    font-size: 18px !important;
+                }
+                </style>
+                """
+                st.markdown(settings_css, unsafe_allow_html=True)
                 
-                # メモリマネージャーをクリア
-                st.session_state.memory_manager.clear_memory()
+                # 設定コンテンツをラップ
+                st.markdown('<div class="settings-content">', unsafe_allow_html=True)
                 
-                # Streamlitの内部チャット状態もクリア
-                if 'messages' in st.session_state:
-                    del st.session_state.messages
-                if 'last_sent_message' in st.session_state:
-                    del st.session_state.last_sent_message
-                if 'user_message_input' in st.session_state:
-                    del st.session_state.user_message_input
-                if 'message_flip_states' in st.session_state:
-                    del st.session_state.message_flip_states
-                
-                # 新しいセッションIDを生成（完全リセット）
-                session_api_client = managers["session_api_client"]
-                
-                # セッションをリセット
-                new_session_id = session_api_client.reset_session()
-                st.session_state.user_id = new_session_id
-                
-                st.success("会話を完全にリセットしました（新しいセッションとして開始）")
-                st.rerun()
-            
-            # フルリセットボタン（Cookie含む完全リセット）
-            st.markdown("---")
-            st.markdown("**⚠️ 危険な操作**")
-            
-            if st.button("🔥 フルリセット（Cookie含む）", 
-                        type="secondary", 
-                        use_container_width=True, 
-                        help="Cookie含む全データを完全にリセットします（ブラウザセッションも新規作成）"):
-                
-                # 確認ダイアログ
-                if 'full_reset_confirm' not in st.session_state:
-                    st.session_state.full_reset_confirm = False
-                
-                if not st.session_state.full_reset_confirm:
-                    st.session_state.full_reset_confirm = True
-                    st.warning("⚠️ 本当にフルリセットしますか？この操作は取り消せません。")
-                    st.info("Cookie削除→新規セッション作成を実行します。もう一度ボタンを押してください。")
-                    st.rerun()
-                else:
-                    # フルリセット実行
+                # ... (エクスポートやリセットボタンのロジックは省略) ...
+                if st.button("🔄 会話をリセット", type="secondary", use_container_width=True, help="あなたの会話履歴のみをリセットします（他のユーザーには影響しません）"):
+                    # チャット履歴を完全にリセット
+                    st.session_state.chat['messages'] = [{"role": "assistant", "content": "何の用？遊びに来たの？", "is_initial": True}]
+                    st.session_state.chat['affection'] = 30
+                    st.session_state.chat['scene_params'] = {"theme": "default"}
+                    st.session_state.chat['limiter_state'] = managers['rate_limiter'].create_limiter_state()
+                    st.session_state.chat['ura_mode'] = False  # 裏モードもリセット
+                    
+                    # メモリマネージャーをクリア
+                    st.session_state.memory_manager.clear_memory()
+                    
+                    # Streamlitの内部チャット状態もクリア
+                    if 'messages' in st.session_state:
+                        del st.session_state.messages
+                    if 'last_sent_message' in st.session_state:
+                        del st.session_state.last_sent_message
+                    if 'user_message_input' in st.session_state:
+                        del st.session_state.user_message_input
+                    if 'message_flip_states' in st.session_state:
+                        del st.session_state.message_flip_states
+                    
+                    # 新しいセッションIDを生成（完全リセット）
                     session_api_client = managers["session_api_client"]
                     
-                    try:
-                        # プログレスバーで進行状況を表示
-                        progress_bar = st.progress(0)
-                        status_text = st.empty()
-                        
-                        status_text.text("🔄 フルリセット開始...")
-                        progress_bar.progress(10)
-                        
-                        # 1. 永続ストレージとローカルユーザーデータ削除
-                        status_text.text("🗑️ ユーザーデータ削除中...")
-                        progress_bar.progress(20)
-                        
-                        # persistent_user_manager 完全廃止
-                        user_id_manager = managers["user_id_manager"]
-                        
-                        # 永続ストレージから削除
-                        persistent_data_deleted = False
+                    # セッションをリセット
+                    new_session_id = session_api_client.reset_session()
+                    st.session_state.user_id = new_session_id
                     
+                    st.success("会話を完全にリセットしました（新しいセッションとして開始）")
+                    st.rerun()
+                
+                # フルリセットボタン（Cookie含む完全リセット）
+                st.markdown("---")
+                st.markdown("**⚠️ 危険な操作**")
+                
+                if st.button("🔥 フルリセット（Cookie含む）", 
+                            type="secondary", 
+                            use_container_width=True, 
+                            help="Cookie含む全データを完全にリセットします（ブラウザセッションも新規作成）"):
+                    
+                    # 確認ダイアログ
+                    if 'full_reset_confirm' not in st.session_state:
+                        st.session_state.full_reset_confirm = False
+                    
+                    if not st.session_state.full_reset_confirm:
+                        st.session_state.full_reset_confirm = True
+                        st.warning("⚠️ 本当にフルリセットしますか？この操作は取り消せません。")
+                        st.info("Cookie削除→新規セッション作成を実行します。もう一度ボタンを押してください。")
+                        st.rerun()
+                    else:
+                        # フルリセット実行
+                        session_api_client = managers["session_api_client"]
                         
-                        # ローカルファイルからも削除（フォールバック）
-                        local_data_deleted = user_id_manager.delete_user_data()
+                        try:
+                            # プログレスバーで進行状況を表示
+                            progress_bar = st.progress(0)
+                            status_text = st.empty()
+                            
+                            status_text.text("🔄 フルリセット開始...")
+                            progress_bar.progress(10)
+                            
+                            # 1. 永続ストレージとローカルユーザーデータ削除
+                            status_text.text("🗑️ ユーザーデータ削除中...")
+                            progress_bar.progress(20)
+                            
+                            # persistent_user_manager 完全廃止
+                            user_id_manager = managers["user_id_manager"]
+                            
+                            # 永続ストレージから削除
+                            persistent_data_deleted = False
                         
-                        user_data_deleted = persistent_data_deleted or local_data_deleted
-                        
-                        # 2. フルリセット実行（Cookie削除→新規セッション作成）
-                        status_text.text("🍪 Cookie削除中...")
-                        progress_bar.progress(40)
-                        
-                        reset_result = session_api_client.full_reset_session()
-                        
-                        if reset_result['success']:
-                            status_text.text("✅ Cookie削除完了、新規セッション作成中...")
-                            progress_bar.progress(60)
                             
-                            # 2. Streamlitセッション状態を完全クリア
-                            keys_to_clear = list(st.session_state.keys())
-                            for key in keys_to_clear:
-                                if key not in ['_session_id', 'session_info']:  # 必要なキーは保持
-                                    del st.session_state[key]
+                            # ローカルファイルからも削除（フォールバック）
+                            local_data_deleted = user_id_manager.delete_user_data()
                             
-                            # CSS読み込みフラグもリセット
-                            st.session_state.css_loaded = False
-                            st.session_state.last_background_theme = ''
-                            st.session_state._initialization_complete = False
+                            user_data_deleted = persistent_data_deleted or local_data_deleted
                             
-                            # メッセージ処理キャッシュもクリア
-                            cache_keys_to_clear = [key for key in st.session_state.keys() if key.startswith('processed_')]
-                            for cache_key in cache_keys_to_clear:
-                                del st.session_state[cache_key]
+                            # 2. フルリセット実行（Cookie削除→新規セッション作成）
+                            status_text.text("🍪 Cookie削除中...")
+                            progress_bar.progress(40)
                             
-                            status_text.text("🔄 セッション状態初期化中...")
-                            progress_bar.progress(80)
+                            reset_result = session_api_client.full_reset_session()
                             
-                            # 3. 新しいユーザーIDを設定
-                            if reset_result.get('new_session_id'):
-                                # 完全なセッションIDを取得（表示用は短縮版）
-                                full_session_id = st.session_state.session_info.get('session_id')
-                                st.session_state.user_id = full_session_id
+                            if reset_result['success']:
+                                status_text.text("✅ Cookie削除完了、新規セッション作成中...")
+                                progress_bar.progress(60)
+                                
+                                # 2. Streamlitセッション状態を完全クリア
+                                keys_to_clear = list(st.session_state.keys())
+                                for key in keys_to_clear:
+                                    if key not in ['_session_id', 'session_info']:  # 必要なキーは保持
+                                        del st.session_state[key]
+                                
+                                # CSS読み込みフラグもリセット
+                                st.session_state.css_loaded = False
+                                st.session_state.last_background_theme = ''
+                                st.session_state._initialization_complete = False
+                                
+                                # メッセージ処理キャッシュもクリア
+                                cache_keys_to_clear = [key for key in st.session_state.keys() if key.startswith('processed_')]
+                                for cache_key in cache_keys_to_clear:
+                                    del st.session_state[cache_key]
+                                
+                                status_text.text("🔄 セッション状態初期化中...")
+                                progress_bar.progress(80)
+                                
+                                # 3. 新しいユーザーIDを設定
+                                if reset_result.get('new_session_id'):
+                                    # 完全なセッションIDを取得（表示用は短縮版）
+                                    full_session_id = st.session_state.session_info.get('session_id')
+                                    st.session_state.user_id = full_session_id
+                                
+                                # 4. 初期状態を再構築（強制リセット）
+                                initialize_session_state(managers, force_reset_override=True)
+                                
+                                # 5. MemoryManagerの完全クリア（念のため）
+                                if hasattr(st.session_state, 'memory_manager'):
+                                    st.session_state.memory_manager.clear_memory()
+                                    logger.info("MemoryManager完全クリア実行")
+                                
+                                # 6. SessionManagerのデータもリセット
+                                session_manager = get_session_manager()
+                                session_manager.reset_session_data()
+                                logger.info("SessionManagerデータリセット実行")
+                                
+                                status_text.text("🎉 フルリセット完了！")
+                                progress_bar.progress(100)
+                                
+                                # 成功メッセージ
+                                st.success(f"🔥 フルリセット完了！")
+                                st.info(f"📁 ローカルユーザーデータ削除: {'✅' if user_data_deleted else '❌'}")
+                                st.info(f"📊 Cookie削除: {'✅' if reset_result.get('cookie_reset') else '❌'}")
+                                st.info(f"🆕 新規セッション: {'✅' if reset_result.get('session_created') else '❌'}")
+                                st.info(f"🔄 旧→新: {reset_result.get('old_session_id')} → {reset_result.get('new_session_id')}")
+                                
+                                # 自動リロード
+                                st.info("⏳ 3秒後に自動でページを再読み込みします...")
+                                reload_js = """
+                                <script>
+                                setTimeout(function() {
+                                    window.location.reload();
+                                }, 3000);
+                                </script>
+                                """
+                                st.markdown(reload_js, unsafe_allow_html=True)
+                                
+                            else:
+                                st.error(f"❌ フルリセット失敗: {reset_result.get('message', '不明なエラー')}")
+                                st.info("通常のリセットを試すか、ページを手動で再読み込みしてください。")
                             
-                            # 4. 初期状態を再構築（強制リセット）
-                            initialize_session_state(managers, force_reset_override=True)
-                            
-                            # 5. MemoryManagerの完全クリア（念のため）
-                            if hasattr(st.session_state, 'memory_manager'):
-                                st.session_state.memory_manager.clear_memory()
-                                logger.info("MemoryManager完全クリア実行")
-                            
-                            # 6. SessionManagerのデータもリセット
-                            session_manager = get_session_manager()
-                            session_manager.reset_session_data()
-                            logger.info("SessionManagerデータリセット実行")
-                            
-                            status_text.text("🎉 フルリセット完了！")
-                            progress_bar.progress(100)
-                            
-                            # 成功メッセージ
-                            st.success(f"🔥 フルリセット完了！")
-                            st.info(f"📁 ローカルユーザーデータ削除: {'✅' if user_data_deleted else '❌'}")
-                            st.info(f"📊 Cookie削除: {'✅' if reset_result.get('cookie_reset') else '❌'}")
-                            st.info(f"🆕 新規セッション: {'✅' if reset_result.get('session_created') else '❌'}")
-                            st.info(f"🔄 旧→新: {reset_result.get('old_session_id')} → {reset_result.get('new_session_id')}")
-                            
-                            # 自動リロード
-                            st.info("⏳ 3秒後に自動でページを再読み込みします...")
-                            reload_js = """
-                            <script>
-                            setTimeout(function() {
-                                window.location.reload();
-                            }, 3000);
-                            </script>
-                            """
-                            st.markdown(reload_js, unsafe_allow_html=True)
-                            
-                        else:
-                            st.error(f"❌ フルリセット失敗: {reset_result.get('message', '不明なエラー')}")
+                        except Exception as e:
+                            logger.error(f"フルリセットエラー: {e}")
+                            st.error(f"❌ フルリセットに失敗しました: {str(e)}")
                             st.info("通常のリセットを試すか、ページを手動で再読み込みしてください。")
                         
-                    except Exception as e:
-                        logger.error(f"フルリセットエラー: {e}")
-                        st.error(f"❌ フルリセットに失敗しました: {str(e)}")
-                        st.info("通常のリセットを試すか、ページを手動で再読み込みしてください。")
-                    
-                    # 確認フラグをリセット
-                    st.session_state.full_reset_confirm = False
+                        # 確認フラグをリセット
+                        st.session_state.full_reset_confirm = False
+                
+                # 設定コンテンツのHTMLタグを閉じる
+                st.markdown('</div>', unsafe_allow_html=True)
             
-            # 設定コンテンツのHTMLタグを閉じる
-            st.markdown('</div>', unsafe_allow_html=True)
-        
         # チュートリアル案内をサイドバーに表示（無効化）
         # tutorial_manager.render_tutorial_sidebar()
 
@@ -3111,7 +3198,7 @@ def main():
         st.session_state.last_run_id = current_run_id
     
     # 全ての依存モジュールを初期化（Cookie処理を含む）
-    cached_managers = initialize_cached_managers()
+    cached_managers = initialize_cached_managers(user_id)
     session_managers = initialize_session_managers()  # ここでCookie処理が実行される
     managers = {**cached_managers, **session_managers}
     
@@ -3380,8 +3467,29 @@ def main():
         tutorial_manager.render_tutorial_tab()
 
     # ポチのコンポーネントはチャットタブ内に移動
-
-# 重複するmain関数を削除（最初のmain関数のみ使用）
+# 自動復元処理のためのJavaScript
+def check_stored_auth():
+    """ページ読み込み時に保存された認証情報をチェック"""
+    return components.html("""
+    <script>
+    const token = localStorage.getItem('hf_token');
+    const userStr = localStorage.getItem('hf_user');
+    
+    if (token && userStr) {
+        try {
+            const user = JSON.parse(userStr);
+            // Streamlitに認証情報を送信
+            window.parent.postMessage({
+                type: 'auto_login',
+                token: token,
+                user: user
+            }, '*');
+        } catch (e) {
+            console.error('Failed to parse user data:', e);
+        }
+    }
+    </script>
+    """, height=0)
 
 if __name__ == "__main__":
     if not Config.validate_config():
